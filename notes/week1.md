@@ -128,11 +128,148 @@ obs_mode是创建环境的核心参数，决定机器人能“看到”什么数
 <img width="942" height="288" alt="image" src="https://github.com/user-attachments/assets/085d99ee-0eb6-4565-ba7e-72b934f1e8c7" />
 
 
+总结：
+1、ManiSkill是一个机器人仿真环境
+2、env_id="PushCube-v1"表示推方块任务
+3、PPO是一种强化学习算法
+4、total_timesteps控制训练总步数，但运行慢不一定只由它决定
+5、evaluation/video rendering 也会很慢
+6、Colab重启后，/content里的文件可能会丢，需要重新安装或更新cd到目录
+
+可以简单理解：
+env.reset()：游戏重新开始
+env.step(action)：机器人做一个动作，环境往前走一步
+observation/obs：机器人看到/知道的状态
+action：机器人执行的动作
+reward：这一步做得好不好
+done/terminated/truncated：这一局是否结束
+policy：机器人当前的决策策略
+PPO：训练policy的一种方法
+evalution：测试现在训练得怎么样
+
+env.reset()会初始化一个episode
+env.step(action)会让机器人执行一个动作
+action是策略网络输出的动作
+obs是环境返回给机器人的观察
+reward用来告诉算法这一步做得好不好
+PPO不断用reward来更新policy
+eval阶段只是测试，不是训练
+capture_video会保存视频，因此可能变慢
+Colab重启后工作目录会丢，要重新安装或cd
 
 
+1、PushCube-v1这个任务机器人做什么？推方块任务，机械臂将立方体推到目标点位。6自由度桌面机械臂，在仿真平面内推动立方体方块，目标是把方块推到指定标记的目标坐标点位；任务奖励会根据方块与目标的距离设计稠密奖励，完成到位即判定任务成功。分为两种训练方案：低维状态输入（读取方块、机械臂坐标）、视觉RGB图像输入（ppo_rgb，仅靠相机画面完成推方块）
+2、PPO是在学什么？PPO（近端策略优化）是强化学习算法
+3、为什么我调小total_timesteps后还是可能很慢？total_timesteps只是全局总终止步数，只控制训练什么时候结束，不会改变单次迭代的计算耗时
+4、Colab重启后为什么会找不到pop.py？Colab的运行时是临时容器，重启/断开连接后容器会完全重置，本地临时文件全部清空
+5、最不理解的3个词是什么？
+·GAE广义优势估计：PPO用来衡量“当前动作比平均动作好多少”的计算方法，结合时序差分与蒙特卡洛回报平滑优势；新手容易分不清优势函数、价值、奖励三者区别，是PPO损失函数的核心前置计算
+·trajectory轨迹（episode）：一条完整交互流程：从环境重置开始，机械臂持续执行动作直到任务成功/达到最大步数，完整保存每一步观测、动作、奖励、物理状态的时序数据；专家演示h5文件、RL训练采集样本全部都是轨迹数据，容易混淆单步transition与完整episode轨迹
+·clip裁剪目标（PPO核心）：PPO独有的约束机制，通过限制新旧策略动作概率比值区间，防止单次梯度更新幅度太大导致策略崩溃；公式抽象，新手很难理解为什么需要裁剪、裁剪区间的作用
+
+-p:目录不存在则创建，存在也不报错
+wget -q:静默下载，不打印多余日志
+gymnasium as gym:新版Gym仿真交互标准库，提供gym.make()创建环境、reset/step交互接口
+env.action_space.sample():随机动作采样，生成机械臂随机关节控制指令
+env.step(action)标准5元组返回（Gymnasium新版规范）：
+      ·obs：执行动作后相机、机器人传感器观测
+      ·rew：单步奖励值，插销任务越靠近目标奖励越高
+      ·terminated：任务成功终止（插销完全插入孔内，自然结束）
+      ·truncated：步数截断终止（达到环境最大仿真步数，强制结束）
+      ·info：调试信息字典，包含elapsed_steps当前已运行总步数
+.item()：把GPU张量转为普通Python数字
+env.render()：返回批量GPU张量，shape为(1,H,W,3)，1是批量纬度，图像存在CUDA显存上
+并行仿真FPS统计标准算法：总仿真帧=环境数量*单环境步数
+pd_joint_delta_pos：PD关节增量位置控制，最稳定的机械臂关节控制方案；还可切换末端6D力控、爪控等模式
+dense：稠密奖励，每一步都给小奖励，训练收敛更快
+sparse：稀疏奖励，仅任务成功时给1，其余为0，难度更高
+
+PPO全称Proximal Policy Optimization（近端策略优化），是目前机器人强化学习最主流、工程最稳定的策略梯度类RL算法，ManiSkill里用它训练机械臂、四足机器人完成抓取、插销、堆叠等任务。分为两个版本：1、ppo.py：低纬观测（关节向量、目标位姿）训练；2、ppo_rgb.py：视觉端到端训练（输入RGB图像/点云，纯视觉无人工状态）
+PPO用简单裁剪目标函数限制新旧策略差异，兼顾稳定、易实现、训练效率
+PPO核心逻辑（分4大模块）
+1、环境交互：收集批量仿真轨迹（ManiSkill GPU并行采集）
+<img width="741" height="134" alt="image" src="https://github.com/user-attachments/assets/7269b06d-cf89-438a-b7e3-5eeee6b3547e" />
+
+2、优势函数计算（GAE广义优势估计，ManiSkill默认使用）
+<img width="406" height="279" alt="image" src="https://github.com/user-attachments/assets/393f5f6b-be7d-42f1-a4d7-d974e6c7fb80" />
+
+3、核心裁剪损失函数PPO-Clip（最关键公式）
+<img width="623" height="238" alt="image" src="https://github.com/user-attachments/assets/e4db284c-6e12-41a3-98e8-cb228aa2c70b" />
+
+4、联合总损失（策略损失+价值损失+熵正则）
+<img width="735" height="270" alt="image" src="https://github.com/user-attachments/assets/3f8c0ee3-c404-45c8-b2c7-911eebe70069" />
+
+5、迭代更新流程（循环往复直到收敛）
+<img width="598" height="205" alt="image" src="https://github.com/user-attachments/assets/65bd6d30-0cb8-4e97-aa65-2778d5180a4f" />
+
+PPO训练耗时很久，无法仅凭打印文字判断训练好坏；TensorBoard用可视化曲线直观监控收敛情况：
+1、奖励稳步上升：训练正常
+2、奖励震荡/断崖下跌：超参数不合适、策略更新过大
+3、熵持续归零：策略过早固化，缺少探索，容易卡在局部最优
+
+ManiSkillTrajectory Dateset：代码内程序化读取轨迹数据，用于算法训练、数据分析
+replay——trajectory：命令行可视化回放，生成视频直观查看动作，不提供程序可读取的结构化数据
+
+index_dict：多层嵌套字典/Group批量时序索引工具
+dict_to_list_of_dicts：配套工具，把（T，dim）时序字典转为长度为T的字典列表（每一项时单步状态）
+
+主线流程：
+创建环境->reset初始化->policy产生action->env.step(action)->得到obs/reward/done->训练或评估
+
+能复现的PushCube smoke test命令（能确认环境坏没坏、ManiSkill能启动、PushCube-v1能运行、PPO脚本能执行、结果目录能生成）：
 
 
+~~~
+python ppo.py \
+      --env_id="PushCube-v1" \
+      --exp_name="smoke-pushcube" \
+      --num_envs=32 \
+      --num_eval_envs=1 \
+      --num_eval_steps=5 \
+      --num_steps=20 \
+      --update_epochs=2 \
+      --num_minibatches=4 \
+      --total_timesteps=12800 \
+      --eval_freq=1 \
+      --no-capture-video
 
+~~~
+#安装ManiSkill依赖与本体
+!pip install mani-skill
+#安装仿真物理引擎配套依赖
+!pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
+~~~
+import gymnasium as gym
+import mani_skill.envs
+env=gym.make("PushCube-v1",obs_mode="state",control_mode="pd_ee_delta_pose")
+obs,info=env.reset()
+print(type(obs))
+print(obs)
+action=env.action_space.sample()
+obs,reward,terminated,truncated,info=env.step(action)
+print(action)
+print(reward)
+print(terminated,truncated)
 
+gymnasium：是OpenAIGym的官方继任版本，现在强化学习环境统一用这个库，提供标准环境交互接口（make/reset/step)
+mani_skill：安装的机器人仿真库，内置PushCube、PickCube等机械臂操作任务
+mani_skill.envs：专门存放所有仿真任务环境
+gym.make()：创建仿真环境实例，返回一个环境对象env
+"PushCube-v1"：任务ID，代表机械臂推方块仿真任务，v1是版本号
+obs_mode="state"：观测模式。state只输出纯数字状态向量（关节角度、物体坐标等），不需要图像渲染，速度快，适合PPO等算法训练；rgb模式会输出相机图片，训练速度慢
+control_mode="pd_ee_delta_pose"：机械臂控制模式。
+pd：PD位置闭环控制器
+ee：end-effector末端执行器（机械爪）
+delta_pose：增量位姿控制，每次动作之修改末端相对上一帧的偏移
+env.reset()：重置环境到初始随机场景（方块随机摆放、机械臂回到初始位置），每一轮episode开始必须调用
+obs：初始观测值（包含机器人、方块全部状态信息）
+info：附加信息字段（场景参数、碰撞标记、物体坐标等辅助数据）
+ManiSkill默认用GPU加速，所有观测、动作、奖励全是PyTorch张量，方便直接送入神经网络训练，不用手动转数组
+env.action_space：环境的动作空间，定义机械臂能输出的动作纬度、取值范围
+.sample()：从动作空间里随机采样一个合法动作（随机给机械臂末端一个微小偏移指令）
+action：保存随机动作tensor，用来传给环境执行一步仿真
+terminated：任务是否成功终止（方块推到目标区域则为True）
+truncated：回合是否超时阶段（步数达到最大限制，提前结束）
+info：额外调试信息
 
