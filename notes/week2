@@ -1,0 +1,21 @@
+Date:2026-07-14
+Enviroment:
+-macOS
+-Apple Silicon arm64
+-Miniforge
+-Python 3.10
+-ManiSkill installed successfully
+
+Result:
+-'import mani_skill' successed
+-'gym.make("PushCube-v1",obs_mode="state")' failed
+
+Error:
+RuntimeError:vk::CreateInstanceUnique:ErrorIncompatibleDriver
+
+Reason:
+The local macOS Vulkan/rendering backend is incompatible with ManiSkill/SAPIEN
+
+Decision:
+Use Mac for coding,notes,and project organization
+Use Colab or Linux/cloud GPU for ManiSkill simulation experiments
