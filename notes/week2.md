@@ -327,6 +327,105 @@ plot(x,[f(x),2*x-3],'x','f(x)',legend=['f(x)','Tangent line(x=1)'])
 导数可以被解释为函数相对于其变量的瞬时变化率，它也是函数曲线的切线的斜率
 梯度是一个向量，其分量是多变量函数相对于其所有变量的偏导数
 链式法则可以用来微分复合函数
+<img width="697" height="127" alt="image" src="https://github.com/user-attachments/assets/0f56dc2b-28a1-4a2c-9f16-0037367c9bfb" />
+
+2.5自动微分
+深度学习框架通过自动计算导数，即自动微分（automatic differentiation）来加快求导。实际上，根据设计好的模型，系统会构建一个计算图（computational graph），来跟踪计算是哪些数据通过哪些操作组合起来产生输出。自动微分使系统能够随后反向传播梯度。这里，反向传播（backpropagate）意味着跟踪整个计算图，填充关于每个参数的偏导数
+2.5.1一个简单的例子
+作为一个演示例子，假设我们想对函数y=2X^TX关于列向量X求导。首先我们创建变量X并为其分配一个初始值
+import torch
+x=torch.arange(4.0)
+x
+在我们计算y关于X的梯度之前，需要一个地方来存储梯度。重要的是，我们不会在每次对一个参数求导时都分配新的内存。因为我们经常会成千上万次地更新相同的参数，每次都分配新的内存可能会快就会将内存耗尽。注意，一个标量函数关于向量X的梯度是向量，并且与X具有相同的形状
+x.requries_grad(True)#等价于x=torch.arange(4.0,requires_grad=True)
+x.grad#默认值是None
+
+现在计算y
+y=2*torch.dot(x,x)
+y
+x是一个长度为4的向量，计算x和x的点积，得到了我们赋值给y的标量输出。接下来，通过调用反向传播函数来自动计算y关于x每个分量的梯度，并打印这些梯度
+y.backward()
+x.grad
+函数y=2X^X关于X的梯度应为4X。让我们快速验证这个梯度是否计算正确
+x.grad==4*x
+现在计算x另一个函数
+#在默认情况下，PyTorch会累积梯度，我们需要清除之前的值
+x.grad.zero_()
+y=x.sum()
+y.backward()
+x.grad
+2.5.2非标量变量的反向传播
+当y不是标量时，向量y关于向量x的导数的最自然解释是一个矩阵。对于高阶和高纬的y和x。求导的结果可以是一个高阶张量
+当调用向量的反向计算时，我们通常会试图计算一批训练样本中每个组成部分的损失函数的导数。这里，我们的目的不是计算微分矩阵，而是单独计算批量中每个样本的偏导数之和
+#对非标量调用backward需要传入一个gradient参数，该参数指定微分函数关于self的梯度
+#本例只想求偏导数的和，所以传递一个1的梯度是合适的
+x.grad.zero_()
+y=x*x
+#等价于y.backward(torch.ones(len(x)))
+y.sum().backward()
+x.grad
+2.5.3分离计算
+有时，我们希望将某些计算移动到记录的计算图之外。例如，假设y是作为x的函数计算的，而z则是作为y和x的函数计算的。想象一下，我们想计算z关于x的梯度，但由于某种原因，希望将y视为一个常数，并且只考虑到x在y被计算后发挥的作用
+这里可以分离y来返回一个新变量u，该变量与y具有相同的值，但丢弃计算图中如何计算y的任何信息。换句话说，梯度不会向后流经u到x。因此，下面的反向传播函数计算z=u*x关于x的偏导数，同时将u作为常数处理，而不是z=x*x*x关于x的偏导数
+x.grad.zero_()
+y=x*x
+u=y.detach()
+z=u*x
+z.sum().backward()
+x.grad==u
+由于记录了y的计算结果，我们随后在y上调用反向传播，得到y=x*x关于x的导数，即2*x
+x.grad.zero_()
+y.sum().backward()
+x.grad==2*x
+2.5.4Python控制流的梯度计算
+使用自动微分的一个好处是：即使构建函数的计算图需要通过Python控制流（例如，条件、循环或任意函数调用），我们仍然可以计算得到变量的梯度。在下面的代码中，while循环的迭代次数和if语句的结果都取决于输入a的值
+def f(a):
+  b=a*2
+  while b.norm()<1000:
+    b=b*2
+  if b.sum()>0:
+    c=b
+  else:
+    c=100*b
+  return c
+
+让我们计算梯度
+a=torch.randn(size=(),requires_grad=True)
+d=f(a)
+d.backward()
+我们现在可以分析上面定义的f函数。它在其输入a中是分段线性的。换言之，对于任何a，存在某个常量标量k，使得f(a)=k*a，其中k的值取决于输入a，因此可以用d/a验证梯度是否正确
+a.grad==d/a
+<img width="701" height="210" alt="image" src="https://github.com/user-attachments/assets/4f5db5ae-9e06-4404-aac0-e3838923ae43" />
+
+2.6概率
+2.6.1基本概率论
+对于每个值，一种自然的方法是将它出现的次数除以投掷的总次数，即此事件（event）概率的估计值。
+大数定律（law of large numbers）告诉我们：随着投掷次数的增加，这个估计值会越来越接近真实的潜在概率。
+%matplotlib inline
+import torch
+from torch.distributions import multinomial
+from d2l import torch as d2l
+在统计学中，我们把从概率分布中抽取样本的过程称为抽样（sampling）。笼统来说，可以把分布（distribution）看作对事件的概率分配。将概率分配给一些离散选择的分布称为多项分布（multinomial distribution）
+为了抽取一个样本，即投骰子，我们只需传入一个概率向量。输出是另一个相同长度的向量：它在索引i处的值是采样结果中i出现的次数
+fair_probs=torch.ones([6])/6
+multinomial.Multinomial(1,fair_probs).sample()
+在估计一个骰子的公平性时，我们希望从同一分布中生成多个样本。如果用Python的for循环来完成这个任务，速度会很慢。因此我们使用深度学习框架的函数同时抽取多个样本，得到我们想要的任意形状的独立样本数组
+multinomial.Multinomial(10,fair_probs).sample()
+我们可以模拟1000次投掷。然后我们可以统计1000次投掷后，每个数字被投中了多少次。具体来说，我们计算相对频率，以作为真实概率的估计
+#将结果存储为32位浮点数以进行除法
+counts=multinomial.Multinomial(1000,fair_probs).sample()
+counts/1000#相对频率作为估计值
+我们也可以看到这些概率如何随着时间的推移收敛到真实概率。让我们进行500组实验，每组抽取10个样本
+counts=multinomial.Multinomial(10,fair_probs).sample((500,))
+cum_counts=counts.cumsum(dim=0)
+estimates=cum_counts/cum_counts.sum(dim=1,keepdims=True)
+d2l.set_figsize((6,4.5))
+for i in range(6):
+  d2l.plt.plot(estimates[:,i].nnumpy(),label=("P(die="+str(i+1)+")"))
+d2l.plt.axhline=(y=0.167,color='black',linestyle='dashed')
+d2l.plt.gca().set_xlabel('Groups of experiments')
+d2l.plt.gca().set_ylabel('Estimated probability')
+d2l.plt.legend();
 
 
 
